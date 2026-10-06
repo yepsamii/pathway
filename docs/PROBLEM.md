@@ -1,5 +1,35 @@
 # PathPay — Transaction & Payment Platform Backend Challenge
 
+## Stack Decisions (locked)
+
+After planning, the implementation will use:
+
+| Layer | Decision |
+|---|---|
+| Architecture | **Modular monolith** (single NestJS app, one Node process, one deployable) |
+| Language | TypeScript (strict) |
+| Framework | **NestJS** (chosen over plain Express for built-in DI, modular boundaries, validation pipes, guards, lifecycle hooks) |
+| Database | PostgreSQL 16 (source of truth) |
+| ORM | **Prisma** for CRUD + raw SQL for money operations (`SELECT FOR UPDATE`, CHECK constraints, partial indexes) |
+| Cache / rate limit / lock | Redis 7 (`@nestjs/throttler` + `ioredis`) |
+| Message broker | **None in v1.** `@nestjs/event-emitter` for in-process async. Broker swap-in documented for future extraction. |
+| Auth | JWT (access 15m + refresh 7d, hashed in DB, rotation + reuse detection) |
+| Outbox | DB table + in-process relay worker (durability without a broker) |
+| Container | Docker, docker-compose v2 |
+| Orchestration | Kubernetes (k8s manifests + kustomize, kind for local) |
+| CI/CD | GitHub Actions (lint, test, image build, push to GHCR) |
+| Load test | k6 |
+| Observability | pino + prom-client + @nestjs/terminus |
+
+**Why modular monolith over microservices:**
+- Faster to ship; one process to debug; same module boundaries (`user`, `wallet`, `payment`, `notification`, `webhook`)
+- Outbox + idempotency + DB constraints give the same money-safety guarantees
+- **Extraction path documented** (phase 08 / 12): swap `@nestjs/event-emitter` for RabbitMQ when a module needs independent scaling
+
+The detailed 12-phase implementation plan lives in [`docs/plan/`](./plan/README.md). Each phase has requirements, structure & tools, acceptance criteria, and a self-test question for interview prep.
+
+---
+
 ## Objective
 
 Build a production-oriented backend platform for a fictional fintech/payment company.
@@ -479,21 +509,9 @@ and:
 
 # 13. Messaging
 
-Introduce an asynchronous message broker.
+Introduce asynchronous event flow so the payment request does not have to synchronously call every downstream service.
 
-Choose:
-
-```text
-Kafka
-```
-
-or:
-
-```text
-RabbitMQ
-```
-
-You should have events such as:
+For this project (modular monolith), use `@nestjs/event-emitter` (in-process) backed by a **transactional outbox** table. Events such as:
 
 ```text
 PaymentCreated
@@ -503,53 +521,57 @@ TransferCompleted
 RefundCreated
 ```
 
-For example:
+are written to `payments.outbox_events` in the same DB transaction as the business write. An in-process relay reads unpublished rows and emits them on the event bus. Subscribers (`notification`, `webhook`) handle them.
+
+The payment flow looks like:
 
 ```text
-Payment Service
+Payment Module
       |
-      | PaymentSucceeded
+      | (DB commit: transaction row + outbox row)
       v
-Message Broker
+Outbox Relay (in-process)
       |
-      +----> Notification Service
+      | emit on event bus
+      v
+Subscribers
       |
-      +----> Analytics Service
+      +----> Notification Module
       |
-      +----> Merchant Webhook Service
+      +----> Webhook Module
 ```
 
-The payment request should not have to synchronously call every downstream service.
+**When to add a real broker (Kafka or RabbitMQ):** if/when you extract modules into separate deployable services. The extraction is a swap of the relay's `EventEmitter.emit` for an `amqp.publish` (or `kafka.send`); the outbox table, payload format, and idempotency contracts stay the same. Document the extraction path in `docs/ARCHITECTURE.md`.
+
+**No broker in v1.** Do not introduce RabbitMQ or Kafka prematurely.
 
 ---
 
 # 14. Duplicate Message Handling
 
-Assume the broker provides **at-least-once delivery**.
+Assume the relay (and any future broker) provides **at-least-once delivery**. The relay may re-emit a row if it crashes after a subscriber ran but before the row was marked published.
 
 Therefore:
 
 ```text
-message received
+event received
       ↓
-database update succeeds
+subscriber runs business logic
       ↓
-consumer crashes
+subscriber crashes before marking processed
       ↓
-message delivered again
+same event delivered again
 ```
 
-Your consumer must not perform the business operation twice.
+Your subscriber must not perform the business operation twice.
 
-Implement an idempotent consumer.
-
-Demonstrate this with a test.
+Implement an **idempotent consumer** using a `processed_events` dedupe table keyed by `event.id`. Demonstrate with a test.
 
 ---
 
-# 15. Notification Service
+# 15. Notification Module
 
-Create a separate service.
+Create the `notification` feature module inside the monolith (it can be extracted to a separate service later).
 
 Responsibilities:
 
@@ -568,23 +590,23 @@ Payment ৳500 successful
 Transaction ID: tx_123
 ```
 
-The important part is asynchronous communication.
+The important part is asynchronous communication (events flow through the in-process bus + outbox; the module is a subscriber).
 
 ---
 
-# 16. Merchant Webhook Service
+# 16. Merchant Webhook Module
 
 When a payment succeeds, notify the merchant.
 
-Implement:
+Implement webhook dispatch from the `webhook` feature module:
 
 ```text
-POST /webhooks/payment
+POST <merchant_webhook_url>
 ```
 
 from the perspective of the internal system.
 
-The webhook service should handle:
+The webhook module should handle:
 
 ```text
 timeouts
@@ -641,31 +663,35 @@ Then a worker publishes events from the outbox.
 
 ---
 
-# 18. Microservice Architecture
+# 18. Module Boundaries
 
-You should have at least:
+You should have at least these feature modules (separate NestJS modules within the monolith):
 
 ```text
-API Gateway
-User Service
-Wallet Service
-Payment Service
-Notification Service
+user-module
+wallet-module
+payment-module
+notification-module
+webhook-module
 ```
 
-You may combine services initially and separate them later.
+You may combine modules initially and separate them later.
 
-The important part is that you understand:
+The important part is that you understand and enforce:
 
 ```text
-service boundaries
+module boundaries
 API contracts
 database ownership
-communication
+communication (in-process for v1; broker-ready for later)
 failure boundaries
 ```
 
-A service should not randomly access another service's database.
+A module should not randomly access another module's database tables. Cross-module data flows through:
+- direct method calls (sync, same-process) — for queries like "fetch user display name"
+- the in-process event bus (async) — for notifications, webhooks, analytics
+
+**Extraction to microservices:** see the Stack Decisions section at the top of this document. When you split, each module becomes a separate NestJS app and the in-process bus becomes RabbitMQ. The outbox table, idempotency, and event payload format do not change.
 
 ---
 
@@ -978,15 +1004,17 @@ resource limits
 horizontal scaling
 ```
 
-At minimum:
+At minimum, the monolith should run as a Kubernetes Deployment with:
 
 ```text
-payment-service
-wallet-service
-notification-service
+pathpay-api (the monolith)
+  - replicas: 3
+  - liveness: GET /health
+  - readiness: GET /ready
+  - HPA on 70% CPU
 ```
 
-should run as Kubernetes deployments.
+Postgres and Redis should reference **managed services** in production (RDS, ElastiCache). For local K8s demo, use `bitnami/postgresql` and `bitnami/redis` Helm charts.
 
 ---
 
@@ -1251,27 +1279,37 @@ If you implement the system in Go:
 
 ---
 
-# 32. Recommended Technology Choice For You
+# 32. Locked Technology Stack
 
-Because your current experience is strongly Node.js-based, I would deliberately use:
+We will deliberately use:
 
 ```text
-Backend language: Go
-Database: PostgreSQL
-Cache: Redis
-Broker: Kafka
+Backend language: TypeScript (Node.js 22)
+Framework: NestJS (modular monolith)
+Database: PostgreSQL 16
+ORM: Prisma + raw SQL for money ops
+Cache: Redis 7 (rate limiting, balance cache)
+Messaging: in-process (@nestjs/event-emitter) + transactional outbox
 Container: Docker
 Orchestration: Kubernetes
 CI/CD: GitHub Actions
+Load test: k6
 ```
 
-Why Go?
+Why NestJS over plain Express or Go?
 
-Because the JD explicitly mentions Go/Java/Python or similar backend technologies, and your resume currently does not demonstrate one of those languages strongly. Your Node.js experience is already useful, so learning the fundamentals of Go while implementing the project gives you a stronger interview story.
+- Your Node.js experience transfers directly; less context switching
+- NestJS gives us DI, modular boundaries, validation pipes, guards, lifecycle hooks out of the box — the boring plumbing that takes 2 weeks to wire up by hand
+- TypeScript + decorators is interview-relevant and matches your existing stack
+- **Modular monolith** gives us the same boundary discipline as microservices without the operational overhead of 5 services in dev
+
+Why not Go (the original recommendation)?
+
+Go would also work, but the backend engineering problems (Postgres locking, idempotency, outbox pattern, retries, observability) are language-agnostic. Solving them in NestJS demonstrates the same depth. Go can be a future stretch goal.
 
 Don't attempt to create a massive production-grade framework.
 
-Use a simple Go project structure and spend your time understanding the **backend engineering problems**.
+Use a simple NestJS project structure and spend your time understanding the **backend engineering problems**.
 
 ---
 
@@ -1378,59 +1416,57 @@ That is where this project becomes significantly more valuable than a normal CRU
 
 ---
 
-# 35. Your 5-Day Execution Order
+# 35. Execution Order
 
-### Day 1
+The detailed implementation plan lives in [`docs/plan/`](./plan/README.md). High-level phases:
+
+### Phase 1
 
 ```text
-Go fundamentals
-PostgreSQL
-schema
+NestJS scaffold
+PostgreSQL schema
 SQL
-transactions
-locking
+constraints
+indexes
 ```
 
-### Day 2
+### Phase 2
 
 ```text
-Wallet
-transfer
-concurrency
-idempotency
-tests
+Auth & JWT
+Wallet module
+Transfer (with SELECT FOR UPDATE)
+Concurrency tests
+Idempotency
 ```
 
-### Day 3
+### Phase 3
 
 ```text
-Redis
-Kafka/RabbitMQ
-microservices
-outbox
-event processing
+Redis (rate limit + cache)
+In-process event bus + outbox
+Notification module
+Webhook module
 ```
 
-### Day 4
+### Phase 4
 
 ```text
-failure handling
-retry
-timeouts
-webhooks
-observability
+Failure handling
+Retry & timeout strategies
+Observability (logs, metrics, request IDs)
 Docker
 ```
 
-### Day 5
+### Phase 5
 
 ```text
-Kubernetes
+Kubernetes manifests
 CI/CD
-load testing
-performance investigation
-architecture documentation
-full mock interview
+Load test (k6)
+Performance investigation
+Architecture documentation
+Full mock interview
 ```
 
 Do not waste time building a frontend.
@@ -1441,6 +1477,6 @@ Do not spend half a day configuring Kubernetes.
 
 The core deliverable is:
 
-> **A backend that cannot lose money even when requests are duplicated, executed concurrently, messages are redelivered, services crash, and dependencies temporarily fail.**
+> **A backend that cannot lose money even when requests are duplicated, executed concurrently, messages are redelivered, the process crashes, and dependencies temporarily fail.**
 
 That single project gives you a concrete story for almost every major requirement in the Pathao JD while directly addressing the gaps visible in your current resume—especially PostgreSQL/SQL, concurrency, distributed systems, messaging, and transaction-heavy backend design.
