@@ -1,0 +1,10 @@
+allowBuilds:
+  '@parcel/watcher': set this to true or false
+  unrs-resolver: set this to true or false
+# PathPay pnpm settings
+# This file is named pnpm-workspace.yaml because pnpm 11 uses it for both
+# workspace declarations AND package-level settings. We use it here to
+# allow build scripts for the native bindings our dev tooling needs.
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - unrs-resolver
