@@ -1,23 +1,7 @@
-Install nestjs cli
-pnpm dlx @nestjs/cli@latest new pathway --package-manager pnpm --skip-git
-
-add api folder
-pnpm dlx @nestjs/cli@latest new api --package-manager pnpm --skip-git
-cd api
-pnpm approve-builds
-pnpm install
-
-Add postgres
-pnpm dlx prisma orm init --target postgres
-Prisma collects anonymous CLI usage data, enabled by default. What's collected and why: https://www.prisma.io/docs/cli. Opt out: run "prisma telemetry disable", set DO_NOT_TRACK=1 or PRISMA_DISABLE_TELEMETRY=1.
-│
-◇  How do you want to write your schema?
-│  Prisma Schema Language (.prisma)
-│
-◇  Where should the schema file go?
-│  src/prisma/contract.prisma
-│
-◇  Also write a .env file from .env.example? (gitignored)
-│  Yes
-
-pnpm dlx prisma skills sync
+1. npx @nestjs/cli@latest new pathway --package-manager npm --skip-git — generates everything, you just edit. Saves you 20 min of "where does tsconfig go."                                                      
+2. Verify it boots: npm run start:dev, hit localhost:3000. Kill it.
+3. Add @nestjs/event-emitter, @nestjs/terminus, @nestjs/config, pg, redis deps in ONE shot.
+4. Wire app.module.ts to import all 5 modules (even if empty).
+5. Health + ready with terminus — DB+Redis pings.
+6. Docker compose with just Postgres + Redis.
+7. Makefile + env + README last.
