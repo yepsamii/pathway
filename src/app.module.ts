@@ -9,7 +9,7 @@ import { WebhookModule } from './modules/webhook/webhook.module';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { HealthModule } from './modules/health/health.module';
-import { NotificationsService } from './modules/notifications/notifications.service';
+import { NotificationsService } from './modules/notification/notification.service';
 
 @Module({
   imports: [ConfigModule.forRoot({
