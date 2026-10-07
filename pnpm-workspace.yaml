@@ -1,10 +1,17 @@
 allowBuilds:
-  '@parcel/watcher': set this to true or false
-  unrs-resolver: set this to true or false
+  '@prisma/client': set this to true or false
+  '@prisma/engines': set this to true or false
+  prisma: set this to true or false
 # PathPay pnpm settings
-# This file is named pnpm-workspace.yaml because pnpm 11 uses it for both
-# workspace declarations AND package-level settings. We use it here to
-# allow build scripts for the native bindings our dev tooling needs.
+# pnpm 11 uses pnpm-workspace.yaml for both workspace declarations AND
+# package-level settings. We use it here to enable build scripts for the
+# native bindings our dev tooling needs.
 onlyBuiltDependencies:
   - '@parcel/watcher'
+  - '@prisma/client'
+  - '@prisma/engines'
+  - '@swc/core'
+  - esbuild
+  - prisma
   - unrs-resolver
+  - workerd
