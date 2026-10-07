@@ -13,7 +13,7 @@ infra-reset:
 dev:
 	npm run start:dev
 	
-dev-build:
+build:
 	npm run build
 
 test:
