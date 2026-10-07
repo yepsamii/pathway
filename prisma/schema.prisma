@@ -1,0 +1,13 @@
+// PathPay — Prisma schema (Phase 02 stub)
+// Phase 02 will fill in real models (users, wallets, payments, etc.).
+// For Phase 01, the schema is empty — Prisma will still emit @prisma/client so
+// the readiness health check (SELECT 1) can compile.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
