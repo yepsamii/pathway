@@ -9,11 +9,12 @@ import { WebhookModule } from './modules/webhook/webhook.module';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { HealthModule } from './modules/health/health.module';
+import { NotificationsService } from './modules/notifications/notifications.service';
 
 @Module({
   imports: [ConfigModule.forRoot({
     isGlobal: true}),EventEmitterModule.forRoot(),HealthModule,UserModule, WalletModule, PaymentModule, NotificationModule, WebhookModule],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, NotificationsService],
 })
 export class AppModule {}
